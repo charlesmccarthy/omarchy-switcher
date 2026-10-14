@@ -1,7 +1,8 @@
 #!/bin/bash
 # Window switcher control, called from Hyprland key bindings and installers.
 #
-#   switcher.sh next | prev | commit   drive the overlay by hand (for testing;
+#   switcher.sh next | prev | commit | cancel
+#                                      drive the overlay by hand (for testing;
 #                                      the Alt+Tab bindings write the command
 #                                      file directly from Hyprland)
 #   switcher.sh enable | disable       add or remove the Alt+Tab bindings
@@ -22,7 +23,7 @@ disable_bindings() {
 }
 
 case "${1:-}" in
-  next | prev | commit)
+  next | prev | commit | cancel)
     commands="${XDG_RUNTIME_DIR:-/tmp}/omarchy-switcher"
     echo "$1" >>"$commands"
     ;;
@@ -32,7 +33,7 @@ case "${1:-}" in
     if grep -qF -e "$marker" "$bindings" 2>/dev/null; then echo enabled; else echo disabled; fi
     ;;
   *)
-    echo "usage: switcher.sh next | prev | commit | enable | disable | status" >&2
+    echo "usage: switcher.sh next | prev | commit | cancel | enable | disable | status" >&2
     exit 1
     ;;
 esac

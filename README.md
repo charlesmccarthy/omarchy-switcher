@@ -3,7 +3,7 @@
 A macOS- and Windows-style Alt+Tab for [Omarchy](https://omarchy.org): hold Alt and tap Tab
 to step through **live previews** of your windows, then let go to switch.
 
-![Window switcher](screenshots/switcher.png)
+![Window switcher demo](screenshots/demo.gif)
 
 It's an Omarchy shell plugin built from the same components as Omarchy's own overlays, so
 it follows your theme, font and corner style.

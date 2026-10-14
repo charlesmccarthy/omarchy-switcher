@@ -11,7 +11,7 @@ import qs.Ui
 // Runs as a shell service so it is always ready. Hyprland (bindings.lua)
 // writes each step to a small command file in $XDG_RUNTIME_DIR, which this
 // streams; that is several times faster than starting an IPC client per key.
-// Each line ends in next, prev or commit. A quick tap switches to the
+// Each line ends in next, prev, commit or cancel. A quick tap switches to the
 // previous window without the overlay appearing; holding Alt shows it after a
 // short delay.
 Item {
@@ -49,6 +49,7 @@ Item {
     if (step === "next") root.next()
     else if (step === "prev") root.prev()
     else if (step === "commit") root.commit()
+    else if (step === "cancel") root.cancel()
   }
 
   function next() { root.ensureOpen(); root.step(1) }
