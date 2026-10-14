@@ -31,14 +31,21 @@ workspace takes you there. Floating windows are brought to the front.
 
 ## How it works
 
-- `install.sh` copies `plugin/` to `~/.config/omarchy/plugins/omarchy-switcher/`, enables
-  it, and adds a marked block to `~/.config/hypr/bindings.lua` that replaces Omarchy's
-  Alt+Tab bindings. Releasing Alt is caught with a Hyprland release binding.
-- Previews are captured with Quickshell's `ScreencopyView` from Hyprland's toplevel list.
-  Windows that haven't been drawn since the shell started show their app icon instead.
+- `install.sh` copies `plugin/` to `~/.config/omarchy/plugins/omarchy-switcher/`, enables it as
+  a shell service (always loaded, so it's instant), and adds one guarded line to
+  `~/.config/hypr/bindings.lua` that loads `plugin/bindings.lua`.
+- `bindings.lua` replaces Omarchy's Alt+Tab. Each step is appended to a small file in
+  `$XDG_RUNTIME_DIR`, which the service streams with `tail -F`; that's several times faster
+  than starting an IPC client per key press.
+- A switch finishes when Alt is physically released: a 15 ms Hyprland timer checks
+  `hl.is_key_down` while a switch is in progress. Release key bindings alone miss quick taps.
+- The target window is focused only after the overlay has unmapped, so Hyprland's focus
+  restore can't undo the switch.
+- Previews come from Quickshell's `ScreencopyView` on Hyprland's toplevels. Windows not drawn
+  since the shell started show their app icon instead.
 - `plugin/switcher.sh enable | disable | status` turns the bindings on and off; the
-  [Omarchy Settings](https://github.com/charlesmccarthy/omarchy-settings) app uses it for
-  its Windows → Window switcher toggle.
+  [Omarchy Settings](https://github.com/charlesmccarthy/omarchy-settings) app uses it for its
+  Windows → Window switcher toggle. `switcher.sh next` / `commit` drive it by hand for testing.
 
 ## Uninstall
 

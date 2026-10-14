@@ -2,13 +2,15 @@
   "schemaVersion": 1,
   "id": "omarchy-switcher",
   "name": "Window switcher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "charlesmccarthy",
   "license": "MIT",
   "description": "Hold Alt and tap Tab to switch windows, with live previews",
-  "kinds": ["overlay"],
+  "kinds": [
+    "service"
+  ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "Switcher.qml"
+    "service": "Switcher.qml"
   }
 }

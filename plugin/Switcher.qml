@@ -8,15 +8,14 @@ import qs.Ui
 
 // Alt+Tab window switcher with live previews, like macOS and Windows.
 //
-// Hyprland bindings (written by the Settings app) drive it through
-// switcher.sh: Alt+Tab calls next(), Alt+Shift+Tab prev(), and releasing Alt
-// calls commit(). A quick tap switches to the previous window without the
-// overlay ever appearing; holding Alt shows it after a short delay.
+// Runs as a shell service so it is always ready. Hyprland (bindings.lua)
+// writes each step to a small command file in $XDG_RUNTIME_DIR, which this
+// streams; that is several times faster than starting an IPC client per key.
+// Each line ends in next, prev or commit. A quick tap switches to the
+// previous window without the overlay appearing; holding Alt shows it after a
+// short delay.
 Item {
   id: root
-
-  property var shell: null
-  property var manifest: null
 
   // `opened` means a switch is in progress (Alt held); `shown` means the
   // overlay is on screen, which only happens once Alt has been held briefly.
@@ -27,9 +26,10 @@ Item {
   property int pendingSteps: 0
   property bool loading: false
   property bool commitPending: false
-  property real lastCommitAt: 0
+  // Window to focus once the overlay has gone; see focusWindow().
+  property string pendingFocus: ""
 
-  readonly property string ownId: (manifest && manifest.id) || "omarchy-switcher"
+  readonly property string commandPath: Quickshell.env("XDG_RUNTIME_DIR") + "/omarchy-switcher"
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -42,51 +42,46 @@ Item {
   readonly property int tileGap: Style.spacing.lg
   readonly property int padding: Style.spacing.panelPadding
 
-  // ---- host contract (summon/hide) ---------------------------------------
-  function open(payloadJson) {
-    var payload = {}
-    try { payload = JSON.parse(payloadJson || "{}") } catch (e) {}
-    if (!root.opened) root.begin()
-    if (payload.step === "next") root.step(1)
-    else if (payload.step === "prev") root.step(-1)
+  // ---- commands ------------------------------------------------------------
+  function handleCommand(line) {
+    var parts = String(line).trim().split(" ")
+    var step = parts[parts.length - 1]
+    if (step === "next") root.next()
+    else if (step === "prev") root.prev()
+    else if (step === "commit") root.commit()
   }
 
-  function close() {
-    root.opened = false
-    root.shown = false
-  }
+  function next() { root.ensureOpen(); root.step(1) }
+  function prev() { root.ensureOpen(); root.step(-1) }
 
-  // ---- IPC entry points (switcher.sh) ------------------------------------
-  function next(arg) { root.ensureOpen(); root.step(1); return "ok" }
-  function prev(arg) { root.ensureOpen(); root.step(-1); return "ok" }
-
-  function commit(arg) {
-    if (!root.opened) {
-      // Alt released before the opening call arrived (a very quick tap).
-      root.lastCommitAt = Date.now()
-      return "ok"
-    }
-    if (root.loading) { root.commitPending = true; return "ok" }
+  function commit() {
+    if (!root.opened) return
+    if (root.loading) { root.commitPending = true; return }
     var target = root.windows[root.selected]
-    if (target && root.selected !== 0) {
-      var focus = 'hl.dsp.focus({ window = "address:' + target.address + '" })'
-      Quickshell.execDetached(["sh", "-c",
-        "hyprctl dispatch " + Util.shellQuote(focus) + " && hyprctl dispatch 'hl.dsp.window.bring_to_top()'"])
-    }
+    root.pendingFocus = target && root.selected !== 0 ? target.address : ""
     root.finish()
-    return "ok"
+    // When the overlay is on screen, Hyprland hands focus back to another
+    // window as it unmaps, which would undo the switch; focus after that.
+    if (!panel.visible) root.focusPending()
   }
 
   function cancel() {
+    root.pendingFocus = ""
     root.finish()
+  }
+
+  function focusPending() {
+    var address = root.pendingFocus
+    root.pendingFocus = ""
+    if (!address) return
+    var focus = 'hl.dsp.focus({ window = "address:' + address + '" })'
+    Quickshell.execDetached(["sh", "-c",
+      "hyprctl dispatch " + Util.shellQuote(focus) + " && hyprctl dispatch 'hl.dsp.window.bring_to_top()'"])
   }
 
   // ---- state -------------------------------------------------------------
   function ensureOpen() {
-    if (root.opened) return
-    root.begin()
-    // Keep the host's open state in sync so its toggle/hide behave.
-    if (root.shell && typeof root.shell.summon === "function") root.shell.summon(root.ownId, "{}")
+    if (!root.opened) root.begin()
   }
 
   function begin() {
@@ -96,7 +91,8 @@ Item {
     root.selected = 0
     root.pendingSteps = 0
     root.loading = true
-    root.commitPending = Date.now() - root.lastCommitAt < 400
+    root.commitPending = false
+    root.pendingFocus = ""
     if (typeof Hyprland.refreshToplevels === "function") Hyprland.refreshToplevels()
     clientsProc.running = true
     showTimer.restart()
@@ -106,7 +102,6 @@ Item {
     root.opened = false
     root.shown = false
     showTimer.stop()
-    if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.ownId)
   }
 
   function step(delta) {
@@ -135,7 +130,7 @@ Item {
     var steps = root.pendingSteps
     root.pendingSteps = 0
     root.step(steps)
-    if (root.commitPending) root.commit("")
+    if (root.commitPending) root.commit()
   }
 
   function iconFor(appClass) {
@@ -159,15 +154,43 @@ Item {
   // A quick Alt+Tab tap should switch without flashing the overlay.
   Timer {
     id: showTimer
-    interval: 110
+    interval: 40
     onTriggered: {
       if (!root.opened) return
+      pointerGate.reset()
       root.shown = true
       Qt.callLater(function() {
         strip.positionViewAtIndex(root.selected, ListView.Contain)
         keyCatcher.forceActiveFocus()
       })
     }
+  }
+
+  // The overlay appears under a stationary pointer; only real pointer
+  // movement may change the selection, or whatever tile happens to be under
+  // the cursor would steal it (often the current window, so nothing switches).
+  PointerMoveGate {
+    id: pointerGate
+    referenceItem: card
+  }
+
+  // Streams steps written by Hyprland. `tail -F` follows the file across
+  // creation and truncation; pdeathsig ends it with the shell.
+  Process {
+    id: commandReader
+    running: true
+    command: ["setpriv", "--pdeathsig", "TERM", "sh", "-c",
+              'touch "$1" && exec tail -F -n0 "$1" 2>/dev/null', "sh", root.commandPath]
+    stdout: SplitParser {
+      onRead: function(line) { root.handleCommand(line) }
+    }
+    onExited: readerRestart.restart()
+  }
+
+  Timer {
+    id: readerRestart
+    interval: 1000
+    onTriggered: if (!commandReader.running) commandReader.running = true
   }
 
   Process {
@@ -182,6 +205,7 @@ Item {
   PanelWindow {
     id: panel
     visible: root.shown || card.opacity > 0
+    onVisibleChanged: if (!visible && root.pendingFocus) Qt.callLater(root.focusPending)
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-switcher"
@@ -206,8 +230,9 @@ Item {
       opacity: root.shown ? 1 : 0
       scale: root.shown ? 1 : 0.97
 
-      Behavior on opacity { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-      Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      // Quick fade out: the switch lands as soon as the overlay is gone.
+      Behavior on opacity { NumberAnimation { duration: root.shown ? 120 : 70; easing.type: Easing.OutCubic } }
+      Behavior on scale { NumberAnimation { duration: root.shown ? 120 : 70; easing.type: Easing.OutCubic } }
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -221,17 +246,11 @@ Item {
           if (k === Qt.Key_Escape) root.cancel()
           else if (k === Qt.Key_Right || k === Qt.Key_Tab) root.step(1)
           else if (k === Qt.Key_Left || k === Qt.Key_Backtab) root.step(-1)
-          else if (k === Qt.Key_Return || k === Qt.Key_Enter) root.commit("")
+          else if (k === Qt.Key_Return || k === Qt.Key_Enter) root.commit()
           else return
           event.accepted = true
         }
-        // Backup for the Hyprland release binding.
-        Keys.onReleased: function(event) {
-          if (event.key === Qt.Key_Alt && root.opened) {
-            root.commit("")
-            event.accepted = true
-          }
-        }
+
       }
 
       ListView {
@@ -333,8 +352,10 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onEntered: root.selected = tile.index
-            onClicked: { root.selected = tile.index; root.commit("") }
+            onPositionChanged: function(mouse) {
+              if (pointerGate.moved(tile, mouse)) root.selected = tile.index
+            }
+            onClicked: { root.selected = tile.index; root.commit() }
           }
         }
       }

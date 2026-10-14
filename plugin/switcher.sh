@@ -1,25 +1,20 @@
 #!/bin/bash
 # Window switcher control, called from Hyprland key bindings and installers.
 #
-#   switcher.sh next | prev | commit   drive the overlay (Alt+Tab bindings)
+#   switcher.sh next | prev | commit   drive the overlay by hand (for testing;
+#                                      the Alt+Tab bindings write the command
+#                                      file directly from Hyprland)
 #   switcher.sh enable | disable       add or remove the Alt+Tab bindings
 #   switcher.sh status                 print "enabled" or "disabled"
 
 id=omarchy-switcher
 bindings="$HOME/.config/hypr/bindings.lua"
 marker="-- omarchy-switcher"
-self="$HOME/.config/omarchy/plugins/$id/switcher.sh"
 
 enable_bindings() {
   disable_bindings
-  cat >>"$bindings" <<LUA
-$marker: Alt+Tab window switcher (remove with: switcher.sh disable)
-hl.unbind("ALT + TAB") $marker
-hl.unbind("ALT + SHIFT + TAB") $marker
-o.bind("ALT + TAB", "Switch windows", '"$self" next') $marker
-o.bind("ALT + SHIFT + TAB", "Switch windows backwards", '"$self" prev') $marker
-o.bind("ALT + ALT_L", "Finish switching windows", '"$self" commit', { release = true }) $marker
-LUA
+  # One guarded line, so a removed plugin can't break the config.
+  printf '%s\n' "local f = os.getenv(\"HOME\") .. \"/.config/omarchy/plugins/$id/bindings.lua\"; local h = io.open(f); if h then h:close(); dofile(f) end $marker" >>"$bindings"
 }
 
 disable_bindings() {
@@ -28,12 +23,8 @@ disable_bindings() {
 
 case "${1:-}" in
   next | prev | commit)
-    # The first call after the shell starts may find the overlay not yet
-    # loaded; summoning it loads it and delivers the step.
-    result=$(omarchy-shell shell call "$id" "$1" "" 2>/dev/null)
-    if [[ $result == "unknown" && $1 != "commit" ]]; then
-      omarchy-shell shell summon "$id" "{\"step\":\"$1\"}" >/dev/null
-    fi
+    commands="${XDG_RUNTIME_DIR:-/tmp}/omarchy-switcher"
+    echo "$1" >>"$commands"
     ;;
   enable) enable_bindings ;;
   disable) disable_bindings ;;
