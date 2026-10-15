@@ -75,9 +75,15 @@ Item {
     var address = root.pendingFocus
     root.pendingFocus = ""
     if (!address) return
+    // Focusing by command normally warps the cursor to the window's centre,
+    // which leaves it parked over the next overlay; keep it where it was by
+    // switching warps off for this one focus, then restoring the user's value.
     var focus = 'hl.dsp.focus({ window = "address:' + address + '" })'
     Quickshell.execDetached(["sh", "-c",
-      "hyprctl dispatch " + Util.shellQuote(focus) + " && hyprctl dispatch 'hl.dsp.window.bring_to_top()'"])
+      'prev=false; hyprctl getoption cursor:no_warps | grep -q "bool: true" && prev=true; ' +
+      'hyprctl --batch "eval hl.config({cursor={no_warps=true}}) ; dispatch $1 ; ' +
+      'dispatch hl.dsp.window.bring_to_top() ; eval hl.config({cursor={no_warps=$prev}})"',
+      "sh", focus])
   }
 
   // ---- state -------------------------------------------------------------
@@ -170,9 +176,12 @@ Item {
   // The overlay appears under a stationary pointer; only real pointer
   // movement may change the selection, or whatever tile happens to be under
   // the cursor would steal it (often the current window, so nothing switches).
+  // Measured against the full-screen backdrop: the card scales in as it
+  // appears, so card coordinates shift under a still pointer.
   PointerMoveGate {
     id: pointerGate
-    referenceItem: card
+    referenceItem: backdrop
+    threshold: 2
   }
 
   // Streams steps written by Hyprland. `tail -F` follows the file across
@@ -215,6 +224,7 @@ Item {
     exclusionMode: ExclusionMode.Ignore
 
     MouseArea {
+      id: backdrop
       anchors.fill: parent
       onClicked: root.cancel()
     }
